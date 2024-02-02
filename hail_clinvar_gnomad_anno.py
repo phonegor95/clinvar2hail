@@ -30,10 +30,10 @@ hl.init(
 def get_zygosity(call):
     return hl.if_else(
         call.is_het(),
-        'het',  # Heterozygous
+        'heterozygous',  # Heterozygous
         hl.if_else(
             call.is_hom_ref() | call.is_hom_var(),
-            'hom',  # Homozygous (either reference or variant)
+            'Homozygous',  # Homozygous (either reference or variant)
             'unknown'  # For no-call or multi-allelic cases
         )
     )
