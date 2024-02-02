@@ -169,6 +169,7 @@ def process_sample_matrix_table(sample_mt, gnomad_mt, pop_code):
             AF_eas=gnomad_mt.rows()[sample_mt.row_key].info.AF_eas
         )
         sample_pd = sample_mt.make_table().to_pandas()
+        sample_pd['Allele frequency (EAS)'] = sample_pd['AF_eas'].apply(lambda x: f"{x[0]*100:.5f}%")
 
     return sample_pd
 
@@ -181,7 +182,7 @@ def process_sample_pd(sample_pd, sample):
     :return: The processed pandas DataFrame.
     """
     # Annotate the DataFrame with disease information
-    disease_info_cols = ['Disease associated', 'Inheritance', 'Disease detail', 'Disease detail source']
+    disease_info_cols = ['Disease associated', 'Inheritance', 'Disease detail', 'Disease source']
     sample_pd[disease_info_cols] = sample_pd.apply(
         lambda row: pd.Series(get_medgen_info(row['MedGen'])),
         axis=1
@@ -192,16 +193,17 @@ def process_sample_pd(sample_pd, sample):
 
     # Clean up the variant names
     sample_pd['Variant'] = sample_pd['Name'].apply(lambda x: re.sub(r'\([^)]+\)', '', x))
+    sample_pd['Gene'] = sample_pd['Name'].apply(lambda x: re.search(r'\((.*?)\)', x).group(1))
 
     # Rename columns
-    rename_columns = {'rsid': 'rsID', 'OriginSimple': 'Origin', 'GeneSymbol': 'Gene', 'AF_global': 'Allele frequency (global)', 'AF_eas': 'Allele frequency (EAS)'}
+    rename_columns = {'rsid': 'rsID', 'OriginSimple': 'Origin', 'ClinicalSignificance': 'Clinical significance'}
     sample_pd.rename(columns=rename_columns, inplace=True)
 
     # Strip sample prefix from column names
     pattern_lstrip = r'^' + re.escape(sample + '.')
     sample_pd.columns = sample_pd.columns.str.replace(pattern_lstrip, '', regex=True)
 
-    sample_pd.drop(['RS# (dbSNP)', 'RCVaccession'], inplace=True)
+    sample_pd.drop(columns = ['RS# (dbSNP)', 'RCVaccession'], inplace=True)
     return sample_pd
 
 if __name__ == '__main__':
@@ -210,7 +212,7 @@ if __name__ == '__main__':
     parser.add_argument('--gnomad_mt_path', default='/mnt/beegfs/hongyf/igenomes_base/Homo_sapiens/GATK/GRCh38/Annotation/GermlineResource/eas_af-only-gnomad.genomes.v4.0.sites.mt', help='Path to the gnomAD Hail matrix table.')
     parser.add_argument('--vcf_mt_path', default='/mnt/beegfs/hongyf/SLURM/results/variant_calling/haplotypecaller/joint_variant_calling/joint_germline_recalibrated.mt', help='Path to the VCF Hail matrix table.')
     parser.add_argument('--output_path', default='/mnt/beegfs/hongyf/SLURM/results/annotation/Hail/', help='Output directory for annotated results.')
-    parser.add_argument('--pop_code', choices=['global', 'eas'], default='global', help='Population code to use for allele frequency.')
+    parser.add_argument('--pop_code', choices=['global', 'eas'], default='eas', help='Population code to use for allele frequency.')
     parser.add_argument('--samples', help='Comma-separated list of sample IDs to process. If not provided, all samples will be processed.')
     
     # Parse the arguments
@@ -219,11 +221,9 @@ if __name__ == '__main__':
     clinvar_ht_path = args.clinvar_ht_path
     gnomad_mt_path = args.gnomad_mt_path
     vcf_mt_path = args.vcf_mt_path
-    output_path = args.output_path
-    pop_code = args.pop_code
 
     # Configure logging
-    logging.basicConfig(filename = output_path + '.command.log',
+    logging.basicConfig(filename = args.output_path + '.command.log',
                     level = logging.INFO,
                     format = '%(asctime)s %(levelname)s:%(message)s')
     
@@ -237,10 +237,16 @@ if __name__ == '__main__':
     for sample in samples:
         logging.info(f'Processing sample: {sample}')
         
-        sample_dir = os.path.join(output_path, sample)
+        sample_dir = os.path.join(args.output_path, sample)
+        output = os.path.join(sample_dir, 'var_details.tsv')
         # Create the directory if it doesn't exist
         if not os.path.exists(sample_dir):
             os.makedirs(sample_dir)
+        else:
+            if os.path.exists(output) and  os.stat(output).st_size == 0:
+                logging.info(f'No valid pathogenic variants found for sample: {sample}')
+                continue
+
 
         sample_mt = joint_mt.filter_cols(joint_mt.s == sample)
         # Filter out entries where the genotype is homozygous reference or missing
@@ -249,13 +255,13 @@ if __name__ == '__main__':
         valid_variant_count = sample_mt.count_rows()
         if valid_variant_count > 0:
             logging.info(f'Found {valid_variant_count} valid pathogenic variants for sample: {sample}')
-            sample_pd = process_sample_matrix_table(sample_mt, gnomad_mt, pop_code)
+            sample_pd = process_sample_matrix_table(sample_mt, gnomad_mt, args.pop_code)
             sample_pd = process_sample_pd(sample_pd, sample)
-            sample_pd.to_csv(os.path.join(sample_dir, 'var_details.tsv'), sep='\t', index=False, quoting = csv.QUOTE_MINIMAL)
+            sample_pd.to_csv(output, sep='\t', index=False, quoting = csv.QUOTE_MINIMAL)
         else:
             logging.info(f'No valid pathogenic variants found for sample: {sample}')
             # Create an empty TSV file
-            with open(os.path.join(sample_dir, 'var_details.tsv'), 'w') as file:
+            with open(output, 'w') as file:
                 pass
 
 hl.stop()
